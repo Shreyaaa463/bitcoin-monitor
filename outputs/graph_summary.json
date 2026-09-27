@@ -1,0 +1,11 @@
+{
+  "num_nodes": 44013,
+  "num_edges": 94797,
+  "node_type_counts": {
+    "IP": 137,
+    "Transaction": 14572,
+    "Wallet": 29232,
+    "ASN": 52,
+    "Country": 20
+  }
+}

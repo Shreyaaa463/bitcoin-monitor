@@ -1,0 +1,64 @@
+{
+  "elapsed_seconds": 31.125773429870605,
+  "n_raw_records": 15000,
+  "n_clean_records": 14572,
+  "geoip_offline_db_used": false,
+  "alerts_path": "/home/shreya_gujarathi/bitcoin-monitor/outputs/alerts.parquet",
+  "processed_path": "/home/shreya_gujarathi/bitcoin-monitor/data/processed/cleaned_transactions.parquet",
+  "edges_path": "/home/shreya_gujarathi/bitcoin-monitor/outputs/edges.parquet",
+  "graph_path": "/home/shreya_gujarathi/bitcoin-monitor/outputs/entity_graph.pickle",
+  "feature_columns": [
+    "num_inputs",
+    "num_outputs",
+    "fan_in",
+    "fan_out",
+    "total_input_amount",
+    "total_output_amount",
+    "avg_amount",
+    "amount_variance",
+    "fee",
+    "unique_wallets_in_tx",
+    "hour_of_day",
+    "day_of_week",
+    "ip_tx_count",
+    "ip_unique_wallets",
+    "ip_unique_countries",
+    "ip_avg_time_gap_seconds",
+    "ip_wallet_ratio",
+    "ip_burst_count",
+    "ip_degree",
+    "ip_in_degree",
+    "ip_out_degree",
+    "ip_pagerank",
+    "ip_betweenness"
+  ],
+  "n_cases": 2,
+  "forensic_anchoring": {
+    "n_cases": 2,
+    "n_new_blocks": 0,
+    "n_updated_blocks": 0,
+    "n_unchanged": 2,
+    "chain_length": 6,
+    "case_summaries": [
+      {
+        "case_id": "CASE-72535A8BFFC3",
+        "action": "unchanged",
+        "merkle_root": "b9dd78f7945ef3cfde00f11c10a4a4632acde596ed4f3fe5482acf6c2f8780f9",
+        "evidence_count": 2702,
+        "block_index": 4
+      },
+      {
+        "case_id": "CASE-C8536D261390",
+        "action": "unchanged",
+        "merkle_root": "d14bdeeaa9cd6cda3ae602b32439552c73a7b74ae8ebee6ccb65c4210ad03877",
+        "evidence_count": 213,
+        "block_index": 5
+      }
+    ]
+  },
+  "forensic_chain_valid": true,
+  "forensic_chain_length": 6,
+  "evidence_store_path": "/home/shreya_gujarathi/bitcoin-monitor/outputs/forensics/evidence_store.json",
+  "blockchain_path": "/home/shreya_gujarathi/bitcoin-monitor/outputs/forensics/blockchain_ledger.json",
+  "cases_summary_path": "/home/shreya_gujarathi/bitcoin-monitor/outputs/cases.json"
+}

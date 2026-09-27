@@ -1,0 +1,16 @@
+{
+  "precision": 0.45008576329331046,
+  "recall": 1.0,
+  "f1": 0.6207712325526378,
+  "roc_auc": 0.9983157557112902,
+  "pr_auc": 0.9841204208154387,
+  "confusion_matrix": {
+    "tn": 11657,
+    "fp": 1603,
+    "fn": 0,
+    "tp": 1312
+  },
+  "n_total": 14572,
+  "n_true_anomalies": 1312,
+  "n_predicted_anomalies": 2915
+}

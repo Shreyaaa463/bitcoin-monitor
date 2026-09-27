@@ -1,0 +1,88 @@
+# =============================================================================
+# bitcoin-monitor configuration
+# All paths are relative to the project root (where run.py is executed from).
+# =============================================================================
+
+paths:
+  raw_data: "data/raw/trace_x_bitcoin_12000.json"   # supports .json, .csv, .xml
+  processed_dir: "data/processed"
+  geoip_dir: "data/geoip"
+  models_dir: "models"
+  outputs_dir: "outputs"
+
+ingestion:
+  # Columns treated as required for a record to be considered structurally valid
+  required_fields:
+    - timestamp
+    - src_ip
+    - txid
+  drop_exact_duplicates: true
+  duplicate_subset: ["txid"]
+
+features:
+  # Time window (hours) used for "burst" / frequency-style behavioral features
+  burst_window_hours: 1
+  # Whether to compute the more expensive graph centrality metrics (betweenness).
+  # For very large graphs this can be slow, so it is toggle-able.
+  compute_betweenness: true
+  betweenness_k_sample: 500   # approximate betweenness sample size for large graphs
+
+model:
+  isolation_forest:
+    n_estimators: 200
+    contamination: 0.2          # prior belief about anomaly fraction; tune per dataset
+    random_state: 42
+    max_samples: "auto"
+  dbscan:
+    eps: 0.8
+    min_samples: 5
+
+scoring:
+  # Weighted combination of normalized [0-1] component scores -> final 0-100 score.
+  # Weights are re-normalized automatically if they don't sum to 1.
+  weights:
+    ml_anomaly: 0.40
+    behavioral: 0.25
+    graph: 0.20
+    network_geo: 0.15
+  thresholds:
+    high: 70
+    medium: 40
+    # anything below "medium" threshold is LOW
+
+explainability:
+  top_n_reasons: 5
+  # Feature-level thresholds (in standard deviations above the mean) used to decide
+  # whether a feature is "unusual enough" to be cited as a reason.
+  z_score_reason_threshold: 1.5
+
+geoip:
+  # If a local MaxMind-style offline DB (e.g. GeoLite2-Country.mmdb / GeoLite2-ASN.mmdb)
+  # is placed in data/geoip/, it will be used. Otherwise falls back to dataset's
+  # geo_country / asn fields.
+  country_db_filename: "GeoLite2-Country.mmdb"
+  asn_db_filename: "GeoLite2-ASN.mmdb"
+
+dashboard:
+  title: "TRACE-X Bitcoin Forensic Intelligence Dashboard"
+  max_graph_neighborhood_hops: 2
+  alerts_page_size: 50
+
+cases:
+  # Transactions are "seed" candidates for case-building if their priority is in
+  # this list, OR (if include_ml_flagged) if the Isolation Forest flagged them --
+  # existing pipeline outputs, reused as-is.
+  seed_priorities: ["HIGH", "MEDIUM"]
+  include_ml_flagged: true
+  # Cluster membership alone never creates a case link -- it must be corroborated
+  # by two seed transactions in the same non-noise DBSCAN cluster occurring within
+  # this many hours of each other.
+  temporal_window_hours: 2
+  min_case_size: 1
+
+forensics:
+  # Local, private, offline blockchain ledger + evidence store. Both are plain
+  # JSON files under outputs/forensics/ and persist across restarts. No network,
+  # no external chain, no cloud service is used anywhere in this layer.
+  evidence_store_filename: "forensics/evidence_store.json"
+  blockchain_filename: "forensics/blockchain_ledger.json"
