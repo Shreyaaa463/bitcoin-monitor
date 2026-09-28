@@ -1,0 +1,148 @@
+# =============================================================================
+# bitcoin-monitor configuration
+# All paths are relative to the project root (where run.py is executed from).
+# =============================================================================
+
+paths:
+  # Input dataset: a single .json/.jsonl/.csv/.xml file, or a DIRECTORY of such files
+  # (e.g. one file per day -- only files not seen before are parsed on the next run).
+  # Override without editing: ./run.sh --input <path>   or   BTC_MONITOR_DATASET=<path>
+  raw_data: "data/raw/trace_x_bitcoin_12000.json"
+  processed_dir: "data/processed"     # shared per-source-file ingestion cache lives here
+  geoip_dir: "data/geoip"
+  models_dir: "models"                # legacy location; each run keeps its own model
+  outputs_dir: "outputs"              # legacy single-run location (read-only fallback for the dashboard)
+
+# ----------------------------------------------------------------------------- #
+# Versioned runs. Every pipeline run lives in runs/<RUN_ID>/ with a manifest.json;
+# a completed run is identified by (dataset SHA-256, pipeline version, config hash)
+# and is reused instead of recomputed. Nothing in this section affects results.
+# ----------------------------------------------------------------------------- #
+runs:
+  root: "runs"
+  lock_wait_seconds: 3600      # how long a second launcher waits for a run in progress
+
+runtime:
+  # Rows per streaming chunk for ingestion/cleaning/inference. Result-neutral
+  # (verified by tests); lower it on small-RAM machines.
+  chunk_rows: 100000
+  # SQLite page cache while building the graph index (memory vs. build speed; result-neutral).
+  sqlite_cache_mb: 256
+
+# ----------------------------------------------------------------------------- #
+# Scale behavior. At or below exact_mode_max_rows valid records the pipeline
+# behaves exactly like the prototype (DBSCAN over all rows, every seed may become
+# a case, NetworkX pickle written). Above it, "auto" settings switch to the
+# candidate funnel described in README "Scalability".
+# ----------------------------------------------------------------------------- #
+scale:
+  exact_mode_max_rows: 20000
+
+graph:
+  # auto: edge_table (sparse computation over the on-disk graph index) whenever it is
+  # exact for the graph schema (verified at runtime), else networkx (small data only).
+  feature_backend: auto          # auto | edge_table | networkx
+  write_networkx_pickle: auto    # auto = only for small datasets (legacy artifact)
+
+ingestion:
+  # Columns treated as required for a record to be considered structurally valid
+  required_fields:
+    - timestamp
+    - src_ip
+    - txid
+  drop_exact_duplicates: true
+  duplicate_subset: ["txid"]
+
+features:
+  # Time window (hours) used for "burst" / frequency-style behavioral features
+  burst_window_hours: 1
+  # Whether to compute the more expensive graph centrality metrics (betweenness).
+  # For very large graphs this can be slow, so it is toggle-able.
+  compute_betweenness: true
+  betweenness_k_sample: 500   # approximate betweenness sample size for large graphs
+
+model:
+  isolation_forest:
+    n_estimators: 200
+    contamination: 0.2          # prior belief about anomaly fraction; tune per dataset
+    random_state: 42
+    max_samples: "auto"
+    # null = fit the scaler + forest on every row (prototype behavior). Set e.g. 1000000
+    # to train on a deterministic uniform sample; every row is still scored.
+    max_train_rows: null
+  dbscan:
+    eps: 0.8
+    min_samples: 5
+
+clustering:
+  # all        : DBSCAN over every transaction (prototype behavior)
+  # candidates : DBSCAN only over the candidate funnel (case seeds: priority in
+  #              cases.seed_priorities, or ML-flagged); other rows get label -2
+  # auto       : all up to scale.exact_mode_max_rows, candidates above
+  scope: auto
+  max_rows: 200000               # cap on clustered candidates (highest risk first)
+
+scoring:
+  # Weighted combination of normalized [0-1] component scores -> final 0-100 score.
+  # Weights are re-normalized automatically if they don't sum to 1.
+  weights:
+    ml_anomaly: 0.40
+    behavioral: 0.25
+    graph: 0.20
+    network_geo: 0.15
+  thresholds:
+    high: 70
+    medium: 40
+    # anything below "medium" threshold is LOW
+
+explainability:
+  top_n_reasons: 5
+  # Feature-level thresholds (in standard deviations above the mean) used to decide
+  # whether a feature is "unusual enough" to be cited as a reason.
+  z_score_reason_threshold: 1.5
+
+geoip:
+  # If a local MaxMind-style offline DB (e.g. GeoLite2-Country.mmdb / GeoLite2-ASN.mmdb)
+  # is placed in data/geoip/, it will be used. Otherwise falls back to dataset's
+  # geo_country / asn fields.
+  country_db_filename: "GeoLite2-Country.mmdb"
+  asn_db_filename: "GeoLite2-ASN.mmdb"
+
+dashboard:
+  title: "TRACE-X Bitcoin Forensic Intelligence Dashboard"
+  max_graph_neighborhood_hops: 2
+  alerts_page_size: 50
+  max_select_options: 20000        # entity pickers show at most this many (use the prefix search)
+  graph_max_nodes: 5000            # neighborhood rendering cap
+  graph_max_neighbors_per_node: 2000   # hub-node cap (e.g. a Country with millions of IPs)
+  download_max_rows: 100000        # CSV export cap for the filtered alert queue
+
+launcher:
+  host: "127.0.0.1"                # local only; set 0.0.0.0 to serve on the LAN (e.g. in Docker)
+  port: 8501
+
+cases:
+  # Transactions are "seed" candidates for case-building if their priority is in
+  # this list, OR (if include_ml_flagged) if the Isolation Forest flagged them --
+  # existing pipeline outputs, reused as-is.
+  seed_priorities: ["HIGH", "MEDIUM"]
+  include_ml_flagged: true
+  # Cluster membership alone never creates a case link -- it must be corroborated
+  # by two seed transactions in the same non-noise DBSCAN cluster occurring within
+  # this many hours of each other.
+  temporal_window_hours: 2
+  min_case_size: 1
+  # A seed linked to NO other seed becomes its own case only if its priority is at
+  # least this level (it always stays in the alert queue). auto = every seed may be
+  # a case up to scale.exact_mode_max_rows (prototype behavior), HIGH above it.
+  singleton_min_priority: auto     # auto | none | LOW | MEDIUM | HIGH
+  # Above this many pairs in one shared-IP/wallet/cluster group, link edges are
+  # recorded as a chain instead of all pairs -- identical cases, bounded memory.
+  max_link_pairs_per_group: 20000
+
+forensics:
+  # Local, private, offline blockchain ledger + evidence store. Both are plain
+  # JSON files under outputs/forensics/ and persist across restarts. No network,
+  # no external chain, no cloud service is used anywhere in this layer.
+  evidence_store_filename: "forensics/evidence_store.json"
+  blockchain_filename: "forensics/blockchain_ledger.json"

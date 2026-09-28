@@ -1,0 +1,13 @@
+# Offline, production-safe Streamlit defaults (also used by a plain
+# `streamlit run dashboard/app.py` from the project root).
+[browser]
+gatherUsageStats = false
+
+[server]
+headless = true
+address = "127.0.0.1"
+port = 8501
+fileWatcherType = "none"
+
+[client]
+showErrorDetails = false

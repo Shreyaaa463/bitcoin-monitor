@@ -1,0 +1,12 @@
+.venv
+runs
+dist
+benchmarks
+outputs/*
+!outputs/.gitkeep
+data/processed/ingest_cache
+data/raw/*
+!data/raw/.gitkeep
+**/__pycache__
+.pytest_cache
+*.pyc

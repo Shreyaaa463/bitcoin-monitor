@@ -1,0 +1,20 @@
+# Runtime dependencies (all pure-Python or manylinux wheels; no services, no network use).
+# Exact versions that were tested together are in requirements.lock.txt -- use that file
+# to build the offline wheelhouse (scripts/build_offline_bundle.sh).
+pandas>=2.0
+numpy>=1.24
+scikit-learn>=1.3
+scipy>=1.10          # sparse PageRank for the edge-table graph backend (already a scikit-learn dependency)
+joblib>=1.3          # model persistence (already a scikit-learn dependency)
+networkx>=3.1
+pyvis>=0.3.2
+streamlit>=1.64      # dashboard uses st.iframe and width="stretch"; tested on 1.64
+plotly>=5.18
+pyyaml>=6.0
+pyarrow>=14.0        # partitioned Parquet storage (required)
+
+# Tests only
+pytest>=7.4
+
+# Optional, only if you place GeoLite2/DB-IP .mmdb files in data/geoip/:
+#   geoip2>=4.7
