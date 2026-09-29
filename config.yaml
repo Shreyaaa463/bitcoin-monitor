@@ -31,8 +31,8 @@ runtime:
 
 # ----------------------------------------------------------------------------- #
 # Scale behavior. At or below exact_mode_max_rows valid records the pipeline
-# behaves exactly like the prototype (DBSCAN over all rows, every seed may become
-# a case, NetworkX pickle written). Above it, "auto" settings switch to the
+# behaves exactly like the prototype (DBSCAN over all rows, every seed may become a
+# case, NetworkX pickle written). Above it, "auto" settings switch to the
 # candidate funnel described in README "Scalability".
 # ----------------------------------------------------------------------------- #
 scale:

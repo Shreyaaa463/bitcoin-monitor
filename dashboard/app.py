@@ -28,6 +28,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import PROJECT_ROOT, get_runs_root, load_config
 from src.graph.build_graph import get_neighborhood, export_pyvis_html
+from src.graph.investigator_view import (
+    FOCUS_MODES,
+    build_investigator_view,
+    export_investigator_pyvis_html,
+    get_entity_details,
+)
 from src.forensics.evidence import EvidenceStore
 from src.forensics.blockchain import Blockchain
 from src.forensics.verification import verify_case, generate_proof_for_txid
@@ -436,64 +442,343 @@ with tabs[3]:
                     st.write(f"- {r}")
 
 # =========================================================================== #
-# TAB 5 — GRAPH EXPLORER
+# TAB 5 — GRAPH EXPLORER (investigator view over analytical entity graph)
 # =========================================================================== #
 with tabs[4]:
-    st.subheader("Interactive entity graph neighborhood")
-    st.caption(
-        "Select any entity to view its local neighborhood (IP \u2192 Transaction \u2192 Wallet \u2192 "
-        "Transaction \u2192 Wallet, etc.). Full-graph rendering is avoided for performance — only the "
-        "local neighborhood around your selection is drawn."
+    st.markdown(
+        """
+        <style>
+        .gx-wrap {
+            background: #14171c;
+            border: 1px solid #2a2f38;
+            border-radius: 6px;
+            padding: 14px 16px 8px 16px;
+            margin-bottom: 12px;
+        }
+        .gx-title {
+            font-family: 'Segoe UI', 'IBM Plex Sans', sans-serif;
+            font-size: 1.15rem;
+            font-weight: 600;
+            color: #e8eaed;
+            letter-spacing: 0.02em;
+            margin: 0 0 4px 0;
+        }
+        .gx-sub {
+            color: #8b919c;
+            font-size: 0.85rem;
+            margin: 0 0 10px 0;
+        }
+        .gx-panel {
+            background: #1a1d23;
+            border: 1px solid #2a2f38;
+            border-radius: 6px;
+            padding: 12px 14px;
+            margin-bottom: 10px;
+        }
+        .gx-panel h4 {
+            margin: 0 0 8px 0;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #8b919c;
+            font-weight: 600;
+        }
+        .gx-kv {
+            font-size: 0.88rem;
+            color: #c8ccd4;
+            margin: 3px 0;
+            line-height: 1.45;
+        }
+        .gx-kv b { color: #e8eaed; font-weight: 600; }
+        .gx-muted { color: #8b919c; font-size: 0.8rem; }
+        .gx-stat {
+            display: inline-block;
+            margin-right: 14px;
+            color: #c8ccd4;
+            font-size: 0.82rem;
+        }
+        .gx-stat strong { color: #e8eaed; }
+        .gx-why {
+            background: #1e2229;
+            border-left: 3px solid #4C9AFF;
+            padding: 8px 10px;
+            margin: 4px 0;
+            font-size: 0.84rem;
+            color: #c8ccd4;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
 
-    if GRAPH is not None:
-        type_options = GRAPH.node_types()
-    else:  # legacy outputs/: prototype behavior over the pickled full graph
-        g = load_graph_legacy(RUN_ID, RUN_DIR)
-        node_types = {}
-        for n, data in g.nodes(data=True):
-            node_types.setdefault(data.get("type", "Unknown"), []).append(n)
-        type_options = sorted(node_types.keys())
+    st.markdown(
+        '<div class="gx-wrap">'
+        '<p class="gx-title">Graph Explorer — Investigation Workspace</p>'
+        '<p class="gx-sub">Selective investigator view derived from the analytical entity graph. '
+        'The stored graph is not modified; this panel ranks and budgets a neighborhood for investigation.</p>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
-    gcol1, gcol2, gcol3 = st.columns(3)
-    with gcol1:
-        selected_type = st.selectbox("Entity type", type_options)
-    with gcol2:
-        node_prefix = prefix_filter("Filter entities (label prefix)", "graph_prefix")
-        if GRAPH is not None:
-            candidates = GRAPH.list_nodes(selected_type, node_prefix, 5000)
-        else:
-            candidates = [n for n in sorted(node_types.get(selected_type, []))
-                          if n.split(":", 1)[-1].startswith(node_prefix)][:5000]
-        selected_node = st.selectbox("Entity", candidates)
-    with gcol3:
-        hops = st.slider("Neighborhood hops", 1, DASH_CFG.get("max_graph_neighborhood_hops", 2) + 1, 2)
+    g = load_graph_legacy(RUN_ID, RUN_DIR)
+    graph_alerts = load_full_alerts_legacy(RUN_ID, RUN_DIR)
+    cases_for_graph = load_json(RUN_ID, RUN_DIR, "cases.json")
 
-    if st.button("Render neighborhood", type="primary") and selected_node is not None:
-        with st.spinner("Building neighborhood graph..."):
-            if GRAPH is not None:
-                sub_g, nb_info = GRAPH.neighborhood(
-                    selected_node, hops=hops,
-                    max_nodes=int(DASH_CFG.get("graph_max_nodes", 5000)),
-                    max_neighbors_per_node=int(DASH_CFG.get("graph_max_neighbors_per_node", 2000)))
+    node_types: dict = {}
+    for n, data in g.nodes(data=True):
+        node_types.setdefault(data.get("type", "Unknown"), []).append(n)
+
+    default_hops = int(DASH_CFG.get("max_graph_neighborhood_hops", 2))
+    default_max_nodes = int(DASH_CFG.get("graph_max_nodes", 75))
+    default_max_edges = int(DASH_CFG.get("graph_max_edges", 150))
+    default_max_tx = int(DASH_CFG.get("graph_max_transactions", 40))
+
+    if "gx_view_html" not in st.session_state:
+        st.session_state["gx_view_html"] = None
+    if "gx_view_stats" not in st.session_state:
+        st.session_state["gx_view_stats"] = None
+    if "gx_view_explanations" not in st.session_state:
+        st.session_state["gx_view_explanations"] = {}
+    if "gx_detail_node" not in st.session_state:
+        st.session_state["gx_detail_node"] = None
+
+    ctrl1, ctrl2, ctrl3 = st.columns([1.1, 1.6, 1.1])
+    with ctrl1:
+        selected_type = st.selectbox(
+            "Entity type",
+            sorted(node_types.keys()),
+            key="gx_entity_type",
+        )
+    with ctrl2:
+        candidates = sorted(node_types.get(selected_type, []))[:5000]
+        selected_node = st.selectbox("Entity", candidates, key="gx_entity")
+    with ctrl3:
+        focus_mode = st.selectbox("Focus", list(FOCUS_MODES), key="gx_focus")
+
+    ctrl4, ctrl5, ctrl6 = st.columns(3)
+    with ctrl4:
+        hops = st.slider(
+            "Neighborhood hops",
+            min_value=1,
+            max_value=max(default_hops + 1, 2),
+            value=min(2, default_hops),
+            key="gx_hops",
+        )
+    with ctrl5:
+        max_nodes = st.slider(
+            "Max nodes",
+            min_value=20,
+            max_value=200,
+            value=default_max_nodes,
+            key="gx_max_nodes",
+        )
+    with ctrl6:
+        max_edges = st.slider(
+            "Max edges",
+            min_value=30,
+            max_value=400,
+            value=default_max_edges,
+            key="gx_max_edges",
+        )
+
+    b1, b2, _ = st.columns([1, 1, 2])
+    with b1:
+        build_clicked = st.button("Build Investigation View", type="primary", key="gx_build")
+    with b2:
+        reset_clicked = st.button("Reset View", key="gx_reset")
+
+    if reset_clicked:
+        st.session_state["gx_view_html"] = None
+        st.session_state["gx_view_stats"] = None
+        st.session_state["gx_view_explanations"] = {}
+        st.session_state["gx_detail_node"] = None
+        st.session_state["gx_built_node"] = None
+
+    if build_clicked and selected_node:
+        with st.spinner("Building ranked investigator neighborhood..."):
+            view = build_investigator_view(
+                g,
+                graph_alerts,
+                selected_node,
+                hops=hops,
+                max_nodes=max_nodes,
+                max_edges=max_edges,
+                max_transactions=default_max_tx,
+                focus=focus_mode,
+                cases=cases_for_graph,
+            )
+            st.session_state["gx_built_node"] = selected_node
+            st.session_state["gx_detail_node"] = selected_node
+            st.session_state["gx_view_stats"] = view.stats
+            st.session_state["gx_view_explanations"] = view.explanations
+            st.session_state["gx_view_relevance"] = view.relevance
+
+            if view.empty:
+                st.session_state["gx_view_html"] = None
+                st.warning("Selected entity was not found in the analytical graph.")
             else:
-                sub_g, nb_info = get_neighborhood(g, selected_node, hops=hops), {"truncated": False}
-            st.write(f"Neighborhood: **{sub_g.number_of_nodes()}** nodes, **{sub_g.number_of_edges()}** edges.")
-            if nb_info.get("truncated"):
-                st.warning(
-                    "Neighborhood truncated for display: "
-                    f"{nb_info.get('hub_nodes_capped', 0)} hub node(s) had more than "
-                    f"{DASH_CFG.get('graph_max_neighbors_per_node', 2000):,} neighbors"
-                    + (f", and the {DASH_CFG.get('graph_max_nodes', 5000):,}-node cap was reached"
-                       if nb_info.get("node_cap_hit") else "")
-                    + ". Reduce hops or start from a more specific entity.")
-            if sub_g.number_of_nodes() > 800:
-                st.warning("Neighborhood is large (>800 nodes) — rendering may be slow. Consider reducing hops.")
-            with tempfile.TemporaryDirectory() as tmpdir:
-                out_html = Path(tmpdir) / "neighborhood.html"
-                export_pyvis_html(sub_g, out_html)
-                html_content = out_html.read_text(encoding="utf-8")
-                st.iframe(html_content, height=720)
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    out_html = Path(tmpdir) / "investigator_view.html"
+                    export_investigator_pyvis_html(
+                        view.graph,
+                        out_html,
+                        selected_node=selected_node,
+                        relevance=view.relevance,
+                        explanations=view.explanations,
+                    )
+                    st.session_state["gx_view_html"] = out_html.read_text(encoding="utf-8")
+
+    # Keep detail panel in sync with current entity selector when a view exists
+    if st.session_state.get("gx_view_html") and selected_node:
+        if st.session_state.get("gx_detail_node") != selected_node:
+            # Allow inspecting another entity's details without rebuilding unless user clicks Build
+            st.session_state["gx_detail_node"] = selected_node
+
+    graph_col, detail_col = st.columns([1.65, 1.0])
+
+    with graph_col:
+        stats = st.session_state.get("gx_view_stats")
+        if stats:
+            st.markdown(
+                f'<div class="gx-panel"><h4>View summary</h4>'
+                f'<span class="gx-stat">Candidate <strong>{stats.get("candidate_nodes", 0)}</strong> nodes / '
+                f'<strong>{stats.get("candidate_edges", 0)}</strong> edges</span>'
+                f'<span class="gx-stat">Retained <strong>{stats.get("retained_nodes", 0)}</strong> nodes / '
+                f'<strong>{stats.get("retained_edges", 0)}</strong> edges</span>'
+                f'<span class="gx-stat">Focus <strong>{stats.get("focus", "")}</strong></span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        html_content = st.session_state.get("gx_view_html")
+        if html_content:
+            st.iframe(html_content, height=660)
+        else:
+            st.markdown(
+                '<div class="gx-panel"><p class="gx-muted">'
+                "No investigation view built yet. Select an entity and click "
+                "<b>Build Investigation View</b>."
+                "</p></div>",
+                unsafe_allow_html=True,
+            )
+
+    with detail_col:
+        detail_node = st.session_state.get("gx_detail_node") or selected_node
+        details = get_entity_details(
+            g, detail_node, alerts=graph_alerts, cases=cases_for_graph
+        ) if detail_node else {"available": False}
+
+        st.markdown('<div class="gx-panel"><h4>Selected entity details</h4>', unsafe_allow_html=True)
+        if not details.get("available"):
+            st.markdown('<p class="gx-muted">No entity selected.</p></div>', unsafe_allow_html=True)
+        else:
+            ntype = details.get("type")
+            lines = [f'<div class="gx-kv"><b>Type</b> — {ntype}</div>']
+
+            if ntype == "Transaction":
+                def _fmt(v):
+                    if v is None or (isinstance(v, float) and pd.isna(v)):
+                        return "—"
+                    if isinstance(v, float):
+                        return f"{v:.1f}"
+                    return str(v)
+
+                lines.extend([
+                    f'<div class="gx-kv"><b>TXID</b> — <code>{details.get("txid")}</code></div>',
+                    f'<div class="gx-kv"><b>Priority</b> — {_fmt(details.get("priority"))}</div>',
+                    f'<div class="gx-kv"><b>Risk score</b> — {_fmt(details.get("risk_score"))}</div>',
+                    f'<div class="gx-kv"><b>Anomaly score</b> — {_fmt(details.get("anomaly_score_0_100"))}</div>',
+                    f'<div class="gx-kv"><b>Cluster</b> — {_fmt(details.get("cluster_label"))}</div>',
+                    f'<div class="gx-kv"><b>Source IP</b> — {_fmt(details.get("src_ip"))}</div>',
+                    f'<div class="gx-kv"><b>Dest IP</b> — {_fmt(details.get("dst_ip"))}</div>',
+                    f'<div class="gx-kv"><b>Country</b> — {_fmt(details.get("geo_country"))}</div>',
+                    f'<div class="gx-kv"><b>ASN</b> — {_fmt(details.get("asn"))}</div>',
+                    f'<div class="gx-kv"><b>Input wallets</b> — {_fmt(details.get("input_addresses"))}</div>',
+                    f'<div class="gx-kv"><b>Output wallets</b> — {_fmt(details.get("output_addresses"))}</div>',
+                ])
+                reasons = details.get("reasons")
+                if reasons is not None and str(reasons) not in ("", "nan", "None"):
+                    lines.append(f'<div class="gx-kv"><b>Reasons</b> — {reasons}</div>')
+
+            elif ntype == "IP":
+                lines.extend([
+                    f'<div class="gx-kv"><b>IP</b> — <code>{details.get("ip")}</code></div>',
+                    f'<div class="gx-kv"><b>Connected transactions</b> — {details.get("connected_transaction_count", 0)}</div>',
+                    f'<div class="gx-kv"><b>Suspicious transactions</b> — {details.get("suspicious_transaction_count", 0)}</div>',
+                    f'<div class="gx-kv"><b>Maximum risk</b> — {details.get("maximum_risk", 0):.1f}</div>',
+                    f'<div class="gx-kv"><b>Countries</b> — {", ".join(details.get("countries") or []) or "—"}</div>',
+                    f'<div class="gx-kv"><b>ASN</b> — {", ".join(details.get("asns") or []) or "—"}</div>',
+                ])
+
+            elif ntype == "Wallet":
+                lines.extend([
+                    f'<div class="gx-kv"><b>Wallet</b> — <code>{details.get("wallet")}</code></div>',
+                    f'<div class="gx-kv"><b>Connected transactions</b> — {details.get("connected_transaction_count", 0)}</div>',
+                    f'<div class="gx-kv"><b>Suspicious transactions</b> — {details.get("suspicious_transaction_count", 0)}</div>',
+                    f'<div class="gx-kv"><b>Maximum risk</b> — {details.get("maximum_risk", 0):.1f}</div>',
+                    f'<div class="gx-kv"><b>Related IPs</b> — {", ".join(details.get("related_ips") or []) or "—"}</div>',
+                ])
+
+            elif ntype == "ASN":
+                lines.extend([
+                    f'<div class="gx-kv"><b>ASN</b> — <code>{details.get("asn")}</code></div>',
+                    f'<div class="gx-kv"><b>Connected IPs</b> — {len(details.get("connected_ips") or [])}</div>',
+                    f'<div class="gx-kv"><b>Countries</b> — {", ".join(details.get("countries") or []) or "—"}</div>',
+                    f'<div class="gx-kv"><b>Relevant transactions</b> — {len(details.get("relevant_transactions") or [])}</div>',
+                ])
+                with st.expander("Connected IPs"):
+                    st.write(details.get("connected_ips") or [])
+
+            elif ntype == "Country":
+                lines.extend([
+                    f'<div class="gx-kv"><b>Country</b> — <code>{details.get("country")}</code></div>',
+                    f'<div class="gx-kv"><b>Connected IPs</b> — {len(details.get("connected_ips") or [])}</div>',
+                    f'<div class="gx-kv"><b>Relevant transactions</b> — {len(details.get("relevant_transactions") or [])}</div>',
+                ])
+                with st.expander("Connected IPs"):
+                    st.write(details.get("connected_ips") or [])
+
+            case_ids = details.get("case_ids") or []
+            if case_ids:
+                shown = ", ".join(case_ids[:8])
+                more = f" (+{len(case_ids) - 8} more)" if len(case_ids) > 8 else ""
+                lines.append(f'<div class="gx-kv"><b>Case IDs</b> — {shown}{more}</div>')
+
+            st.markdown("\n".join(lines) + "</div>", unsafe_allow_html=True)
+
+        # Why is this node shown?
+        st.markdown('<div class="gx-panel"><h4>Why is this node shown?</h4>', unsafe_allow_html=True)
+        exps = st.session_state.get("gx_view_explanations") or {}
+        node_exps = exps.get(detail_node, []) if detail_node else []
+        if node_exps:
+            why_html = "".join(f'<div class="gx-why">{e}</div>' for e in node_exps[:6])
+            st.markdown(why_html + "</div>", unsafe_allow_html=True)
+        elif st.session_state.get("gx_view_html"):
+            st.markdown(
+                '<p class="gx-muted">No ranked explanation for this entity in the current view. '
+                "Build the view with this entity selected to see retention reasons.</p></div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<p class="gx-muted">Build an investigation view to see retention reasons.</p></div>',
+                unsafe_allow_html=True,
+            )
+
+        # Quick list of retained high-relevance nodes
+        rel = st.session_state.get("gx_view_relevance") or {}
+        if rel:
+            st.markdown('<div class="gx-panel"><h4>Top retained by relevance</h4>', unsafe_allow_html=True)
+            top = sorted(rel.items(), key=lambda kv: kv[1], reverse=True)[:8]
+            rows = []
+            for nid, score in top:
+                ntype = g.nodes[nid].get("type", "?") if nid in g else "?"
+                label = g.nodes[nid].get("label", nid) if nid in g else nid
+                rows.append(
+                    f'<div class="gx-kv"><b>{ntype}</b> {str(label)[:28]} '
+                    f'<span class="gx-muted">({score:.1f})</span></div>'
+                )
+            st.markdown("\n".join(rows) + "</div>", unsafe_allow_html=True)
 
 # =========================================================================== #
 # TAB 6 — ML / EVALUATION

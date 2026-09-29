@@ -1,0 +1,37 @@
+{
+  "total_records": 15000,
+  "valid_records": 14572,
+  "invalid_records": 428,
+  "duplicate_records": 99,
+  "missing_value_counts": {
+    "timestamp": 85,
+    "src_ip": 63,
+    "dst_ip": 80,
+    "src_port": 0,
+    "dst_port": 0,
+    "txid": 55,
+    "input_addresses": 55,
+    "output_addresses": 0,
+    "input_amounts": 0,
+    "output_amounts": 0,
+    "fee": 180,
+    "script_type": 0,
+    "geo_country": 110,
+    "asn": 95,
+    "transaction_status": 0,
+    "synthetic_label": 0,
+    "anomaly_type": 13650,
+    "anomaly_family": 13650
+  },
+  "invalid_ip_count": 123,
+  "invalid_timestamp_count": 155,
+  "invalid_reasons": {
+    "missing_required_field:timestamp": 85,
+    "missing_required_field:src_ip": 63,
+    "missing_required_field:txid": 55,
+    "invalid_timestamp": 68,
+    "invalid_src_ip": 60,
+    "empty_input_addresses": 53,
+    "duplicate_txid": 44
+  }
+}
